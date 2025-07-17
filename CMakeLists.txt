@@ -28,19 +28,31 @@ endif()
 
 add_library(particle_filter src/particle_filter.cpp)
 add_library(likelihood_field src/likelihood_field.cpp)
+add_library(dynamic_object_detector src/dynamic_object_detector.cpp)
+add_library(dynamic_aware_sensor_model src/dynamic_aware_sensor_model.cpp)
+
 target_include_directories(particle_filter PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_include_directories(likelihood_field PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
+target_include_directories(dynamic_object_detector PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_include_directories(dynamic_aware_sensor_model PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+
 ament_target_dependencies(likelihood_field nav_msgs)
+ament_target_dependencies(dynamic_object_detector sensor_msgs nav_msgs geometry_msgs)
+ament_target_dependencies(dynamic_aware_sensor_model sensor_msgs nav_msgs geometry_msgs)
 
 add_executable(amcl_lite_node src/amcl_lite_node.cpp)
 ament_target_dependencies(amcl_lite_node rclcpp sensor_msgs nav_msgs geometry_msgs)
-target_link_libraries(amcl_lite_node particle_filter likelihood_field)
+target_link_libraries(amcl_lite_node particle_filter likelihood_field dynamic_object_detector dynamic_aware_sensor_model)
 
-install(TARGETS amcl_lite_node particle_filter likelihood_field
+install(TARGETS amcl_lite_node particle_filter likelihood_field dynamic_object_detector dynamic_aware_sensor_model
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})

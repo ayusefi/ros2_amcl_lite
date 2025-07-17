@@ -8,12 +8,16 @@
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <optional>
 #include <ros2_amcl_lite/likelihood_field.hpp>
+#include <ros2_amcl_lite/dynamic_object_detector.hpp>
+#include <ros2_amcl_lite/dynamic_aware_sensor_model.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 
 class AmclLiteNode : public rclcpp::Node {
 public:
-    AmclLiteNode() : Node("amcl_lite_node"), pf_(100) {
+    AmclLiteNode() : Node("amcl_lite_node"), pf_(100), 
+                     dynamic_detector_(0.5, 0.1, 0.3, 10),
+                     dynamic_sensor_model_(0.2, 0.7) {
         scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
             "/bcr_bot/scan", 10,
             std::bind(&AmclLiteNode::scan_callback, this, std::placeholders::_1));
@@ -30,6 +34,12 @@ public:
             "amcl_lite_pose", 10);
         particles_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/amcl_lite_particles", 10);
+        
+        // Add parameter for enabling/disabling dynamic object detection
+        this->declare_parameter("enable_dynamic_detection", true);
+        this->declare_parameter("dynamic_detection_threshold", 0.5);
+        this->declare_parameter("dynamic_weight", 0.7);
+        this->declare_parameter("sensor_sigma", 0.2);
     }
     void initial_pose_callback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
         // Set all particles around the initial pose with some noise
@@ -56,25 +66,74 @@ public:
 private:
 
     void scan_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg) {
-        if (!likelihood_field_initialized_) return;
+        if (!likelihood_field_initialized_ || !current_map_) return;
+        
+        // Get current parameters
+        bool enable_dynamic = this->get_parameter("enable_dynamic_detection").as_bool();
+        double dynamic_weight = this->get_parameter("dynamic_weight").as_double();
+        double sensor_sigma = this->get_parameter("sensor_sigma").as_double();
+        
+        // Update sensor model parameters
+        dynamic_sensor_model_.setParameters(sensor_sigma, dynamic_weight);
+        
         auto& particles = pf_.particles();
-        double sigma = 0.2; // meters, sensor noise
-        double norm_const = 1.0 / (std::sqrt(2 * M_PI) * sigma);
-        for (auto& p : particles) {
-            double log_weight = 0.0;
-            double px = p.x, py = p.y, ptheta = p.theta;
-            for (size_t i = 0; i < msg->ranges.size(); i += 8) {
-                double range = msg->ranges[i];
-                if (range < msg->range_min || range > msg->range_max) continue;
-                double angle = msg->angle_min + i * msg->angle_increment;
-                double mx = px + range * std::cos(ptheta + angle);
-                double my = py + range * std::sin(ptheta + angle);
-                double dist = likelihood_field_.getDistance(mx, my);
-                double prob = norm_const * std::exp(-0.5 * (dist * dist) / (sigma * sigma));
-                log_weight += std::log(prob + 1e-9);
+        
+        // Get current pose estimate for dynamic object detection
+        geometry_msgs::msg::PoseStamped current_pose;
+        if (!particles.empty()) {
+            // Use mean pose as current estimate
+            double mean_x = 0, mean_y = 0, mean_theta = 0;
+            for (const auto& p : particles) {
+                mean_x += p.x;
+                mean_y += p.y;
+                mean_theta += p.theta;
             }
-            p.weight = std::exp(log_weight);
+            mean_x /= particles.size();
+            mean_y /= particles.size();
+            mean_theta /= particles.size();
+            
+            current_pose.header.stamp = msg->header.stamp;
+            current_pose.header.frame_id = "map";
+            current_pose.pose.position.x = mean_x;
+            current_pose.pose.position.y = mean_y;
+            current_pose.pose.orientation.w = std::cos(mean_theta / 2);
+            current_pose.pose.orientation.z = std::sin(mean_theta / 2);
         }
+        
+        // Update dynamic object detection if enabled
+        if (enable_dynamic && !particles.empty()) {
+            dynamic_detector_.updateDetection(*msg, current_pose, *current_map_);
+        }
+        
+        // Update particle weights
+        if (enable_dynamic) {
+            // Use dynamic-aware sensor model
+            for (auto& p : particles) {
+                std::array<double, 3> pose = {p.x, p.y, p.theta};
+                p.weight = dynamic_sensor_model_.calculateParticleWeight(
+                    *msg, pose, likelihood_field_, dynamic_detector_, *current_map_);
+            }
+        } else {
+            // Use standard sensor model
+            double sigma = sensor_sigma;
+            double norm_const = 1.0 / (std::sqrt(2 * M_PI) * sigma);
+            for (auto& p : particles) {
+                double log_weight = 0.0;
+                double px = p.x, py = p.y, ptheta = p.theta;
+                for (size_t i = 0; i < msg->ranges.size(); i += 8) {
+                    double range = msg->ranges[i];
+                    if (range < msg->range_min || range > msg->range_max) continue;
+                    double angle = msg->angle_min + i * msg->angle_increment;
+                    double mx = px + range * std::cos(ptheta + angle);
+                    double my = py + range * std::sin(ptheta + angle);
+                    double dist = likelihood_field_.getDistance(mx, my);
+                    double prob = norm_const * std::exp(-0.5 * (dist * dist) / (sigma * sigma));
+                    log_weight += std::log(prob + 1e-9);
+                }
+                p.weight = std::exp(log_weight);
+            }
+        }
+        
         // Normalize weights
         double sum = 0.0;
         for (const auto& p : particles) sum += p.weight;
@@ -140,10 +199,20 @@ private:
             *iter_z = 0.0f; ++iter_z;
         }
         particles_pub_->publish(cloud);
+        
+        // Log dynamic obstacles if enabled
+        if (enable_dynamic) {
+            const auto& obstacles = dynamic_detector_.getCurrentObstacles();
+            if (!obstacles.empty()) {
+                RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, 
+                                    "Detected %zu dynamic obstacles", obstacles.size());
+            }
+        }
     }
     void map_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
         std::cout << "Received OccupancyGrid with size: " << msg->data.size() << std::endl;
         likelihood_field_.fromOccupancyGrid(*msg);
+        current_map_ = msg;  // Store map for dynamic object detection
         std::cout << "Likelihood field initialized." << std::endl;
         likelihood_field_initialized_ = true;
     }
@@ -174,9 +243,12 @@ private:
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
     ParticleFilter pf_;
     LikelihoodField likelihood_field_;
+    DynamicObjectDetector dynamic_detector_;
+    DynamicAwareSensorModel dynamic_sensor_model_;
     bool likelihood_field_initialized_ = false;
     std::optional<nav_msgs::msg::Odometry> last_odom_;
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initial_pose_sub_;
+    nav_msgs::msg::OccupancyGrid::SharedPtr current_map_;
 };
 
 int main(int argc, char **argv) {
