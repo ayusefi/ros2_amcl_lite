@@ -15,31 +15,97 @@ Incorporating a dynamic-object-aware sensor model that discounts unexpected Lida
   - Maintain standard motion model and resampling strategy.
 
 ## 3. Evaluation Metrics
-- Pose RMSE (translation in meters, rotation in radians) over time.
-- Time to converge: time until 95% of runs achieve error below threshold.
-- Effective Sample Size (ESS) to quantify particle diversity.
-- CPU utilization and average particle count.
+
+### 3.1 Primary Metrics
+- **Absolute Trajectory Error (ATE)**: RMSE of position error (meters) over entire trajectory
+- **Relative Pose Error (RPE)**: Frame-to-frame pose error for local accuracy assessment
+- **Angular Error**: RMSE of orientation error (radians) over time
+- **Time to Converge**: Time until 95% of particles achieve error below 0.5m threshold
+
+### 3.2 Secondary Metrics
+- **Effective Sample Size (ESS)**: Measure of particle diversity (higher = better)
+- **Particle Concentration**: Std deviation of particle spread
+- **Recovery Time**: Time to relocalize after kidnapping (seconds)
+- **Computational Efficiency**: CPU utilization and processing time per scan
+
+### 3.3 Data Collection Format
+All metrics logged to CSV files with timestamps:
+- `timestamp,ground_truth_x,ground_truth_y,ground_truth_theta,estimated_x,estimated_y,estimated_theta,num_particles,ess,processing_time,dynamic_obstacles_detected`
 
 ## 4. Test Scenarios
-1. **Static Environment**
-   - Controlled indoor map with no moving obstacles.
-2. **Dynamic Environment**
-   - Same map with 2–3 simulated moving people crossing corridors.
-3. **Kidnapped-Robot Trials**
-   - Robot is teleported to unknown poses mid-run; measure recovery time.
 
-## 5. Procedure
-1. For each scenario, run 10 trials with the baseline and 10 with the proposed method.
-2. Record live pose estimates and ground-truth from Gazebo / real-robot logs.
-3. Compute metrics offline using analysis scripts (e.g., in `scripts/analysis/`).
-4. Perform statistical comparison (paired t-test) on RMSE and recovery times.
+### 4.1 Scenario A: Static Environment Navigation
+- **Map**: Indoor office environment with corridors and rooms
+- **Path**: Predefined square path (4m x 4m) with 4 waypoints
+- **Duration**: 5 minutes per trial
+- **Repetitions**: 10 trials per algorithm
+- **Conditions**: No moving obstacles, consistent lighting
 
-## 6. Timeline
-- Week 1: Implement dynamic-object detector and weight modifier.
-- Week 2: Integrate into AMCL-Lite and validate on static map.
-- Week 3: Run dynamic-environment experiments.
-- Week 4: Conduct kidnapped-robot trials and analyze results.
-- Week 5: Write up findings and refine parameters.
+### 4.2 Scenario B: Dynamic Environment Navigation  
+- **Map**: Same indoor office environment
+- **Path**: Same predefined square path
+- **Duration**: 5 minutes per trial
+- **Repetitions**: 10 trials per algorithm
+- **Conditions**: 2-3 simulated people crossing robot path at intervals
+
+### 4.3 Scenario C: Kidnapped Robot Test
+- **Map**: Indoor office environment
+- **Path**: Initial navigation, then manual relocation
+- **Procedure**: 
+  1. Robot navigates normally for 2 minutes
+  2. Robot teleported to random location (3 different locations)
+  3. Measure recovery time and accuracy
+- **Repetitions**: 10 trials per algorithm per location
+- **Conditions**: Both static and dynamic environments
+
+## 5. Data Collection and Analysis Implementation
+
+### 5.1 Research Data Logger
+- **Purpose**: Systematic collection of quantitative metrics for algorithm comparison
+- **Data Format**: CSV files with timestamps, pose estimates, ground truth, and performance metrics
+- **Metrics Collected**:
+  - Absolute Trajectory Error (ATE) and Relative Pose Error (RPE)
+  - Effective Sample Size (ESS) and particle diversity
+  - Processing time and computational efficiency
+  - Dynamic obstacle detection statistics
+
+### 5.2 Automated Experiment Runner
+- **Script**: `scripts/run_research_experiments.py`
+- **Features**: 
+  - Automated execution of multiple trials
+  - Scenario-based testing (static, dynamic, kidnapped robot)
+  - Algorithm comparison (baseline vs. dynamic-aware)
+  - Gazebo integration for ground truth data
+
+### 5.3 Statistical Analysis Tools
+- **Script**: `scripts/analyze_research_data.py`
+- **Capabilities**:
+  - Statistical significance testing (t-tests, Cohen's d)
+  - Performance visualization and plotting
+  - Comprehensive research report generation
+  - Time series analysis and convergence metrics
+
+### 5.4 Experiment Execution
+```bash
+# Phase 1: Baseline experiments (switch to master branch)
+git checkout master
+colcon build --packages-select ros2_amcl_lite
+python3 scripts/run_research_experiments.py --algorithm amcl_lite_baseline --trials 10
+
+# Phase 2: Dynamic-aware experiments (switch to feature branch)
+git checkout feature/dynamic-object-aware-sensor
+colcon build --packages-select ros2_amcl_lite
+python3 scripts/run_research_experiments.py --algorithm amcl_lite_dynamic --trials 10
+
+# Phase 3: Analysis and reporting
+python3 scripts/analyze_research_data.py --data-dir logs/research_data --output-dir analysis_results
+```
+
+### 5.5 Expected Outcomes
+- **Quantitative Comparison**: RMSE, convergence time, particle diversity metrics
+- **Statistical Validation**: p-values, effect sizes, confidence intervals
+- **Visual Analysis**: Time series plots, box plots, significance heatmaps
+- **Research Report**: Structured findings with conclusions and recommendations
 
 ---
 
