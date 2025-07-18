@@ -30,7 +30,7 @@ public:
         // Declare parameters first
         this->declare_parameter("max_particles", 2000);
         this->declare_parameter("min_particles", 500);
-        this->declare_parameter("enable_dynamic_detection", true);
+        this->declare_parameter("enable_dynamic_detection", false);  // BASELINE: Disabled by default
         this->declare_parameter("dynamic_detection_threshold", 0.5);
         this->declare_parameter("dynamic_weight", 0.7);
         this->declare_parameter("sensor_sigma", 0.2);
